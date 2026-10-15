@@ -2,19 +2,21 @@
 import React, { useState, useEffect } from 'react';
 import { useStringplexStore } from '../../store/useStringplexStore';
 import { GUITAR_STRINGS } from '../../constants/guitarConstants';
+import { BenchmarkClash } from '../../types/stringplex';
+import { UnisonContrastDrawer } from './UnisonContrastDrawer';
 import {
   Zap,
   TrendingUp,
   Sliders,
   RotateCcw,
   CheckCircle2,
-  AlertTriangle,
   XCircle,
   Sparkles,
   Trophy,
   Loader2,
-  ArrowRight,
   ShieldCheck,
+  Eye,
+  Layers,
 } from 'lucide-react';
 
 export const BenchmarkOptimizerView: React.FC = () => {
@@ -35,6 +37,7 @@ export const BenchmarkOptimizerView: React.FC = () => {
   const totalNotes = Object.keys(activeProfile?.fingerprints || {}).length;
 
   const [filterMode, setFilterMode] = useState<'all' | 'clashes' | 'low-margin'>('all');
+  const [selectedClash, setSelectedClash] = useState<BenchmarkClash | null>(null);
 
   // Automatically run benchmark on mount if calibrated notes exist and no benchmark run yet
   useEffect(() => {
@@ -49,6 +52,17 @@ export const BenchmarkOptimizerView: React.FC = () => {
     if (filterMode === 'low-margin') return c.isCorrect && c.margin < 0.20;
     return true;
   });
+
+  const totalWeight = (
+    disambiguatorWeights.harmonicWeight +
+    disambiguatorWeights.scrapeWeight +
+    disambiguatorWeights.centroidWeight +
+    disambiguatorWeights.inharmonicityWeight +
+    disambiguatorWeights.rolloffWeight +
+    disambiguatorWeights.h1H2Weight +
+    disambiguatorWeights.decayWeight +
+    disambiguatorWeights.nutBonusWeight
+  ).toFixed(2);
 
   return (
     <div className="space-y-6">
@@ -65,7 +79,7 @@ export const BenchmarkOptimizerView: React.FC = () => {
             </h2>
             <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
               Tests every recorded note against its rival unison candidates on your fretboard, then sweeps
-              parameter space to discover the mathematically optimal weights maximizing accuracy and confidence margin.
+              parameter space across 6 physical acoustic discriminators to discover the optimal weights.
             </p>
           </div>
 
@@ -143,7 +157,7 @@ export const BenchmarkOptimizerView: React.FC = () => {
               <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
             </div>
             <div className="text-3xl font-black text-sky-300">
-              {lastBenchmarkResult ? `+${(lastBenchmarkResult.avgMarginPercent).toFixed(1)}%` : '—'}
+              {lastBenchmarkResult ? `+${lastBenchmarkResult.avgMarginPercent.toFixed(1)}%` : '—'}
             </div>
             <div className="text-[10px] text-slate-500 mt-1">Lead over #2 rival string</div>
           </div>
@@ -194,25 +208,15 @@ export const BenchmarkOptimizerView: React.FC = () => {
               <span>Acoustic Feature Weights & Scaling Parameters</span>
             </h3>
             <p className="text-xs text-slate-400">
-              Adjust how strongly each acoustic dimension influences string selection on your instrument.
+              Adjust how strongly each physical dimension influences string selection on your instrument.
             </p>
           </div>
           <div className="text-xs font-mono text-slate-400">
-            Total Weight:{' '}
-            <span className="text-sky-400 font-bold">
-              {(
-                disambiguatorWeights.harmonicWeight +
-                disambiguatorWeights.scrapeWeight +
-                disambiguatorWeights.centroidWeight +
-                disambiguatorWeights.inharmonicityWeight +
-                disambiguatorWeights.decayWeight +
-                disambiguatorWeights.nutBonusWeight
-              ).toFixed(2)}
-            </span>
+            Total Weight: <span className="text-sky-400 font-bold">{totalWeight}</span>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 font-mono text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 font-mono text-xs">
           {/* Harmonic Weight */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
             <div className="text-slate-400 text-[11px] mb-1">Harmonic Match</div>
@@ -249,22 +253,40 @@ export const BenchmarkOptimizerView: React.FC = () => {
             <div className="text-[9px] text-slate-500 mt-1">Wound vs plain burst</div>
           </div>
 
-          {/* Centroid Weight */}
+          {/* Spectral Rolloff Weight (NEW) */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
-            <div className="text-slate-400 text-[11px] mb-1">Spectral Centroid</div>
-            <div className="text-lg font-bold text-amber-400 mb-2">
-              {(disambiguatorWeights.centroidWeight * 100).toFixed(0)}%
+            <div className="text-slate-400 text-[11px] mb-1">Spectral Rolloff</div>
+            <div className="text-lg font-bold text-cyan-400 mb-2">
+              {(disambiguatorWeights.rolloffWeight * 100).toFixed(0)}%
             </div>
             <input
               type="range"
               min="0.05"
               max="0.40"
               step="0.02"
-              value={disambiguatorWeights.centroidWeight}
-              onChange={(e) => setDisambiguatorWeights({ centroidWeight: parseFloat(e.target.value) })}
-              className="w-full accent-amber-400 cursor-pointer"
+              value={disambiguatorWeights.rolloffWeight}
+              onChange={(e) => setDisambiguatorWeights({ rolloffWeight: parseFloat(e.target.value) })}
+              className="w-full accent-cyan-400 cursor-pointer"
             />
-            <div className="text-[9px] text-slate-500 mt-1">Center of spectral mass</div>
+            <div className="text-[9px] text-slate-500 mt-1">85% power threshold</div>
+          </div>
+
+          {/* H1/H2 Energy Ratio Weight (NEW) */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+            <div className="text-slate-400 text-[11px] mb-1">H1/H2 Ratio</div>
+            <div className="text-lg font-bold text-indigo-400 mb-2">
+              {(disambiguatorWeights.h1H2Weight * 100).toFixed(0)}%
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="0.40"
+              step="0.02"
+              value={disambiguatorWeights.h1H2Weight}
+              onChange={(e) => setDisambiguatorWeights({ h1H2Weight: parseFloat(e.target.value) })}
+              className="w-full accent-indigo-400 cursor-pointer"
+            />
+            <div className="text-[9px] text-slate-500 mt-1">Fundamental suppression</div>
           </div>
 
           {/* Inharmonicity Weight */}
@@ -285,10 +307,28 @@ export const BenchmarkOptimizerView: React.FC = () => {
             <div className="text-[9px] text-slate-500 mt-1">String core stiffness</div>
           </div>
 
+          {/* Centroid Weight */}
+          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+            <div className="text-slate-400 text-[11px] mb-1">Spectral Centroid</div>
+            <div className="text-lg font-bold text-amber-400 mb-2">
+              {(disambiguatorWeights.centroidWeight * 100).toFixed(0)}%
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="0.40"
+              step="0.02"
+              value={disambiguatorWeights.centroidWeight}
+              onChange={(e) => setDisambiguatorWeights({ centroidWeight: parseFloat(e.target.value) })}
+              className="w-full accent-amber-400 cursor-pointer"
+            />
+            <div className="text-[9px] text-slate-500 mt-1">Center of spectral mass</div>
+          </div>
+
           {/* Comb Epsilon */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
             <div className="text-slate-400 text-[11px] mb-1">Comb Regularization</div>
-            <div className="text-lg font-bold text-indigo-400 mb-2">
+            <div className="text-lg font-bold text-blue-400 mb-2">
               ε = {disambiguatorWeights.combEpsilon.toFixed(2)}
             </div>
             <input
@@ -298,7 +338,7 @@ export const BenchmarkOptimizerView: React.FC = () => {
               step="0.01"
               value={disambiguatorWeights.combEpsilon}
               onChange={(e) => setDisambiguatorWeights({ combEpsilon: parseFloat(e.target.value) })}
-              className="w-full accent-indigo-400 cursor-pointer"
+              className="w-full accent-blue-400 cursor-pointer"
             />
             <div className="text-[9px] text-slate-500 mt-1">Pluck comb notch floor</div>
           </div>
@@ -333,8 +373,9 @@ export const BenchmarkOptimizerView: React.FC = () => {
                 {filteredClashes.length} / {clashes.length} notes
               </span>
             </h3>
-            <p className="text-xs text-slate-400">
-              Exact simulated cross-examination of each recorded note against competing strings on your fretboard.
+            <p className="text-xs text-slate-400 mt-0.5">
+              Simulated cross-examination of each recorded note against competing strings on your fretboard.{' '}
+              <span className="text-sky-400 font-medium">Click any row to open the Unison Contrast Inspector.</span>
             </p>
           </div>
 
@@ -385,11 +426,13 @@ export const BenchmarkOptimizerView: React.FC = () => {
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400 text-[11px] uppercase tracking-wider">
                   <th className="py-3 px-3">Pitch</th>
+                  <th className="py-3 px-3">Typology</th>
                   <th className="py-3 px-3">Ground Truth</th>
                   <th className="py-3 px-3">Classifier Choice</th>
                   <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-3">Confidence Margin</th>
-                  <th className="py-3 px-3">Candidate Breakdown</th>
+                  <th className="py-3 px-3">Competitors</th>
+                  <th className="py-3 px-3 text-right">Inspect</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
@@ -397,17 +440,45 @@ export const BenchmarkOptimizerView: React.FC = () => {
                   const trueMeta = GUITAR_STRINGS[c.trueString];
                   const predMeta = GUITAR_STRINGS[c.predictedString];
                   const isTight = c.isCorrect && c.margin < 0.20;
+                  const isSelected =
+                    selectedClash?.trueString === c.trueString &&
+                    selectedClash?.trueFret === c.trueFret;
 
                   return (
                     <tr
                       key={`${c.trueString}_${c.trueFret}_${idx}`}
-                      className={`hover:bg-slate-900/40 transition-colors ${
-                        !c.isCorrect ? 'bg-rose-950/15' : isTight ? 'bg-amber-950/10' : ''
+                      onClick={() => setSelectedClash(c)}
+                      className={`hover:bg-sky-500/10 cursor-pointer transition-colors ${
+                        isSelected
+                          ? 'bg-sky-500/15 border-l-2 border-sky-400'
+                          : !c.isCorrect
+                          ? 'bg-rose-950/15'
+                          : isTight
+                          ? 'bg-amber-950/10'
+                          : ''
                       }`}
                     >
                       <td className="py-2.5 px-3">
                         <span className="font-bold text-sky-400">{c.noteName}</span>{' '}
                         <span className="text-[10px] text-slate-500">({c.midiNote})</span>
+                      </td>
+
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full border font-bold ${
+                            c.clashType === 'plain-vs-wound'
+                              ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                              : c.clashType === 'wound-vs-wound'
+                              ? 'text-purple-400 bg-purple-500/10 border-purple-500/20'
+                              : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                          }`}
+                        >
+                          {c.clashType === 'plain-vs-wound'
+                            ? 'Plain / Wound'
+                            : c.clashType === 'wound-vs-wound'
+                            ? 'Wound / Wound'
+                            : 'Plain / Plain'}
+                        </span>
                       </td>
 
                       <td className="py-2.5 px-3">
@@ -490,6 +561,19 @@ export const BenchmarkOptimizerView: React.FC = () => {
                           })}
                         </div>
                       </td>
+
+                      <td className="py-2.5 px-3 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedClash(c);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-sky-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                          title="Inspect side-by-side acoustic contrast"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
@@ -498,6 +582,12 @@ export const BenchmarkOptimizerView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* ─── Interactive Unison Contrast Drawer ─── */}
+      <UnisonContrastDrawer
+        clash={selectedClash}
+        onClose={() => setSelectedClash(null)}
+      />
     </div>
   );
 };

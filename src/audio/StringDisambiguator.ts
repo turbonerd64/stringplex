@@ -16,11 +16,13 @@ import {
 } from '../constants/guitarConstants';
 
 export const DEFAULT_DISAMBIGUATOR_WEIGHTS: DisambiguatorWeights = {
-  harmonicWeight: 0.38,
-  scrapeWeight: 0.22,
-  centroidWeight: 0.16,
+  harmonicWeight: 0.30,
+  scrapeWeight: 0.20,
+  centroidWeight: 0.12,
   inharmonicityWeight: 0.14,
-  decayWeight: 0.10,
+  rolloffWeight: 0.12,
+  h1H2Weight: 0.10,
+  decayWeight: 0.08,
   nutBonusWeight: 0.04,
   combEpsilon: 0.12,
   softmaxTemperature: 0.10,
@@ -176,6 +178,39 @@ export class StringDisambiguator {
     const elapsedMs = liveVector.elapsedMsSinceOnset ?? 60;
     const isEarlyAttackEpoch = elapsedMs <= 100;
 
+    // Detect clash typology across competing physical strings for this note
+    const hasPlain = rawCandidates.some((rc) => !GUITAR_STRINGS[rc.stringNum].isWound);
+    const hasWound = rawCandidates.some((rc) => GUITAR_STRINGS[rc.stringNum].isWound);
+    const clashType: 'plain-vs-wound' | 'wound-vs-wound' | 'plain-vs-plain' =
+      hasPlain && hasWound ? 'plain-vs-wound' : hasWound ? 'wound-vs-wound' : 'plain-vs-plain';
+
+    // Context-Aware Adaptive Multipliers tailored to the specific acoustic physics of each clash type:
+    let mHarmonic = 1.0;
+    let mScrape = 1.0;
+    let mCentroid = 1.0;
+    let mInharm = 1.0;
+    let mRolloff = 1.0;
+    let mH1H2 = 1.0;
+    let mNut = 1.0;
+
+    if (clashType === 'plain-vs-wound') {
+      // Plain vs Wound: Scraping wire wrap & HF rolloff are defining physical discriminators
+      mScrape = 1.45;
+      mRolloff = 1.45;
+      mHarmonic = 0.85;
+    } else if (clashType === 'wound-vs-wound') {
+      // Wound vs Wound: Inharmonicity B (length/gauge ratio) and H1/H2 compliance rule
+      mInharm = 1.55;
+      mH1H2 = 1.60;
+      mScrape = 0.50; // Downweight ambiguous scrape
+      mRolloff = 0.80;
+    } else {
+      // Plain vs Plain: Open nut termination prior & diameter stiffness ratio (.016 vs .012)
+      mNut = 1.60;
+      mInharm = 1.30;
+      mScrape = 0.50;
+    }
+
     // Collect calibrated vectors for candidate candidates to calculate inter-candidate discriminative variance
     const candidateCalVectors: Array<{ stringNum: StringIndex; fretNum: number; vector: HarmonicVector }> = [];
     for (const c of rawCandidates) {
@@ -292,6 +327,30 @@ export class StringDisambiguator {
           centroidProx = Math.max(0, Math.min(1, Math.exp(-centroidDiff / 250)));
         }
 
+        // ── 3B. High-Resolution Spectral Rolloff Proximity (85% Power) ──
+        // Plain strings sustain power up to 6-8.5kHz; wound strings roll off sharply at 2.5-3.5kHz
+        let rolloffProx = 0.5;
+        const liveRolloff = liveVector.spectralRolloffHz || 0;
+        const calRolloff = calVec.spectralRolloffHz || 0;
+        if (liveRolloff > 0 && calRolloff > 0) {
+          const rolloffDiff = Math.abs(liveRolloff - calRolloff);
+          rolloffProx = Math.max(0, Math.min(1, Math.exp(-rolloffDiff / 750)));
+        } else {
+          const expectedRolloff = isWound ? 3000 : 7000;
+          const rDiff = Math.abs((liveVector.spectralRolloffHz || 4500) - expectedRolloff);
+          rolloffProx = Math.max(0, Math.min(1, Math.exp(-rDiff / 1000)));
+        }
+
+        // ── 3C. Fundamental-to-Second Harmonic Ratio (H1/H2) Proximity ──
+        // Short thick wound strings fretted high up experience H1 suppression; H2 dominates
+        let h1H2Prox = 0.5;
+        const liveH1H2 = liveVector.h1H2Ratio || 1.0;
+        const calH1H2 = calVec.h1H2Ratio || 1.0;
+        if (liveH1H2 > 0 && calH1H2 > 0) {
+          const h1h2RatioRatio = Math.min(liveH1H2, calH1H2) / Math.max(liveH1H2, calH1H2);
+          h1H2Prox = Math.max(0, Math.min(1, Math.pow(h1h2RatioRatio, 0.6)));
+        }
+
         // ── 4. Inharmonicity B with Theoretical Physics Prior Blending ──
         // Deterministic scaling: B_theoretical(s, f) = B0(s) * 2^(f / 6)
         const theoreticalB = getTheoreticalInharmonicityB(c.stringNum, c.fretNum);
@@ -326,14 +385,16 @@ export class StringDisambiguator {
         // Open string nut physics bonus: if playing an open string and damping is slow, reward it
         const openNutBonus = c.fretNum === 0 && hasLiveDecay && (liveVector.deltaSigmaHL || -30) >= -16;
 
-        // Composite raw score weighting using auto-tunable parameters:
+        // Composite raw score weighting using context-aware clustered parameters:
         let compositeRaw =
-          this.weights.harmonicWeight * harmonicSim +
-          (hasLiveScrape ? this.weights.scrapeWeight * scrapeSim : 0.10 * 0.5) +
-          this.weights.centroidWeight * centroidProx +
-          this.weights.inharmonicityWeight * inharmonicityProx +
+          (this.weights.harmonicWeight * mHarmonic) * harmonicSim +
+          (hasLiveScrape ? (this.weights.scrapeWeight * mScrape) * scrapeSim : 0.08 * 0.5) +
+          (this.weights.centroidWeight * mCentroid) * centroidProx +
+          (this.weights.inharmonicityWeight * mInharm) * inharmonicityProx +
+          (this.weights.rolloffWeight * mRolloff) * rolloffProx +
+          (this.weights.h1H2Weight * mH1H2) * h1H2Prox +
           this.weights.decayWeight * decayProx +
-          (openNutBonus ? this.weights.nutBonusWeight : 0);
+          (openNutBonus ? (this.weights.nutBonusWeight * mNut) : 0);
 
         compositeRaw = isFinite(compositeRaw) && !isNaN(compositeRaw)
           ? Math.max(0.01, Math.min(1.0, compositeRaw))
@@ -353,6 +414,8 @@ export class StringDisambiguator {
             harmonicDistanceScore: Math.round(harmonicSim * 100) / 100,
             centroidProximity: Math.round(centroidProx * 100) / 100,
             inharmonicityProximity: Math.round(inharmonicityProx * 100) / 100,
+            rolloffProximity: Math.round(rolloffProx * 100) / 100,
+            h1H2Proximity: Math.round(h1H2Prox * 100) / 100,
             decayProximity: hasLiveDecay ? Math.round(decayProx * 100) / 100 : undefined,
             hfScrapeScore: hasLiveScrape ? Math.round(scrapeSim * 100) / 100 : undefined,
             pluckBetaEstimated: Math.round(bestBeta * 1000) / 1000,
@@ -484,6 +547,11 @@ export class StringDisambiguator {
         ? Math.max(0, pred.similarityScore - result.candidates[1].similarityScore)
         : 1.0;
 
+      const hasPlain = candidates.some((rc) => !GUITAR_STRINGS[rc.stringNum].isWound);
+      const hasWound = candidates.some((rc) => GUITAR_STRINGS[rc.stringNum].isWound);
+      const clashType: 'plain-vs-wound' | 'wound-vs-wound' | 'plain-vs-plain' =
+        hasPlain && hasWound ? 'plain-vs-wound' : hasWound ? 'wound-vs-wound' : 'plain-vs-plain';
+
       totalMargin += margin;
 
       clashes.push({
@@ -496,10 +564,14 @@ export class StringDisambiguator {
         isCorrect,
         confidence: conf,
         margin: Math.round(margin * 100) / 100,
+        clashType,
+        testVector: testVec,
         competitors: result.candidates.map((c) => ({
           stringNum: c.stringNum,
           fretNum: c.fretNum,
           similarityScore: c.similarityScore,
+          calibratedVector: c.calibratedVector,
+          featureBreakdown: c.featureBreakdown,
         })),
       });
     }
@@ -545,29 +617,31 @@ export class StringDisambiguator {
     let bestScore = initialBench.accuracyPercent * 100 + initialBench.avgMarginPercent * 5;
     let iterations = 0;
 
-    // Focused multi-dimensional parameter grid tailored to physical guitar acoustics
-    const harmonicWeights = [0.25, 0.35, 0.45, 0.55];
-    const scrapeWeights = [0.12, 0.20, 0.28, 0.36];
-    const centroidWeights = [0.08, 0.14, 0.20];
-    const inharmonicityWeights = [0.08, 0.14, 0.20];
-    const combEpsilons = [0.08, 0.12, 0.18];
-    const temperatures = [0.07, 0.10, 0.13];
+    // Multi-dimensional parameter grid encompassing all 6 acoustic discriminators
+    const harmonicWeights = [0.22, 0.30, 0.38];
+    const scrapeWeights = [0.14, 0.22, 0.30];
+    const rolloffWeights = [0.08, 0.14, 0.20];
+    const h1H2Weights = [0.06, 0.12, 0.18];
+    const inharmonicityWeights = [0.10, 0.16];
+    const temperatures = [0.07, 0.10];
 
     for (const hw of harmonicWeights) {
       for (const sw of scrapeWeights) {
-        for (const cw of centroidWeights) {
-          for (const iw of inharmonicityWeights) {
-            for (const ce of combEpsilons) {
+        for (const rw of rolloffWeights) {
+          for (const hw2 of h1H2Weights) {
+            for (const iw of inharmonicityWeights) {
               for (const temp of temperatures) {
                 iterations++;
                 const candidateWeights: DisambiguatorWeights = {
                   harmonicWeight: hw,
                   scrapeWeight: sw,
-                  centroidWeight: cw,
+                  centroidWeight: 0.12,
                   inharmonicityWeight: iw,
-                  decayWeight: 0.10,
+                  rolloffWeight: rw,
+                  h1H2Weight: hw2,
+                  decayWeight: 0.08,
                   nutBonusWeight: 0.04,
-                  combEpsilon: ce,
+                  combEpsilon: 0.12,
                   softmaxTemperature: temp,
                 };
 

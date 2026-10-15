@@ -71,6 +71,8 @@ export interface CandidateMatch {
     harmonicDistanceScore: number;
     centroidProximity: number;
     inharmonicityProximity: number;
+    rolloffProximity?: number;
+    h1H2Proximity?: number;
     decayProximity?: number;
     hfScrapeScore?: number;
     pluckBetaEstimated?: number;
@@ -105,11 +107,13 @@ export interface CalibrationStep {
 }
 
 export interface DisambiguatorWeights {
-  harmonicWeight: number;      // weight for 12-harmonic spectral distance (default: 0.38)
-  scrapeWeight: number;        // weight for fingernail transient scrape ratio (default: 0.22)
-  centroidWeight: number;      // weight for high-resolution spectral centroid (default: 0.16)
+  harmonicWeight: number;      // weight for 12-harmonic spectral distance (default: 0.32)
+  scrapeWeight: number;        // weight for fingernail transient scrape ratio (default: 0.20)
+  centroidWeight: number;      // weight for high-resolution spectral centroid (default: 0.12)
   inharmonicityWeight: number; // weight for stiffness B coefficient (default: 0.14)
-  decayWeight: number;         // weight for modal damping decay velocity (default: 0.10)
+  rolloffWeight: number;       // weight for 85% spectral rolloff frequency (default: 0.12)
+  h1H2Weight: number;          // weight for fundamental-to-2nd harmonic ratio (default: 0.10)
+  decayWeight: number;         // weight for modal damping decay velocity (default: 0.08)
   nutBonusWeight: number;      // weight for open nut termination boundary prior (default: 0.04)
   combEpsilon: number;         // excitation comb regularization floor (default: 0.12)
   softmaxTemperature: number;  // contrast temperature for probability scaling (default: 0.10)
@@ -125,10 +129,14 @@ export interface BenchmarkClash {
   isCorrect: boolean;
   confidence: number;
   margin: number; // confidence difference between #1 and #2
+  clashType?: 'plain-vs-wound' | 'wound-vs-wound' | 'plain-vs-plain';
+  testVector?: HarmonicVector;
   competitors: Array<{
     stringNum: StringIndex;
     fretNum: number;
     similarityScore: number;
+    calibratedVector?: HarmonicVector;
+    featureBreakdown?: CandidateMatch['featureBreakdown'];
   }>;
 }
 
